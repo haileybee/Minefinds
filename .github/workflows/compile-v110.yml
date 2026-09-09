@@ -1,0 +1,75 @@
+name: Compile MineFinds v1.1.0
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct source and apply hotfixes
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/hailey/minefinds/MainActivity.java')
+          s = p.read_text()
+          old = '''        new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).setOnShowListener(d -> ((AlertDialog)d).getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); d.dismiss(); refreshWorlds(); })).show();'''
+          new = '''        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
+                  dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); dialog.dismiss(); refreshWorlds(); }));
+                  dialog.show();'''
+          if old not in s:
+              raise SystemExit('Expected broken world dialog pattern not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -F 'a.put(o);}return a;' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'dialog.setOnShowListener' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          ! grep -F '.setPositiveButton("Save",null).setOnShowListener' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run core tests
+        shell: bash
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Compile Android app
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload compiler-test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-v1.1.0-compiler-test
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
