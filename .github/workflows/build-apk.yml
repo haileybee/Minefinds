@@ -20,8 +20,10 @@ jobs:
       - name: Reconstruct MineFinds v1.1.0 source
         shell: bash
         run: |
-          echo "8d0c5d9d68ecf9b8e7df581752df0963529f991c2dfcd81c7c55b1f60e70ddc0  .payload/project.tar.gz" | sha256sum -c -
-          tar -xzf .payload/project.tar.gz
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
           test -f app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
           test -s app/src/main/res/drawable-nodpi/minefinds_boots.png
           grep -F 'jytglrhvkzbsfpizjtrp.supabase.co/functions/v1/minefinds-sync' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
@@ -34,8 +36,8 @@ jobs:
           python - <<'PY'
           import base64, re
           from pathlib import Path
-          text=Path('/tmp/minefinds-stable-workflow.yml').read_text()
-          m=re.search(r"echo '([A-Za-z0-9+/=]+)' \\| base64 -d > signing/minefinds\\.keystore", text)
+          text = Path('/tmp/minefinds-stable-workflow.yml').read_text()
+          m = re.search(r"echo '([^']+)' \| base64 -d > signing/minefinds\.keystore", text)
           if not m:
               raise SystemExit('Permanent MineFinds signing key not found in historical workflow')
           Path('signing/minefinds.keystore').write_bytes(base64.b64decode(m.group(1)))
@@ -110,6 +112,7 @@ jobs:
           grep -F 'Share world' app/src/main/java/com/hailey/minefinds/MainActivity.java
           grep -F 'DB_VERSION = 2' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
           grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          grep -F '@drawable/minefinds_boots' app/src/main/AndroidManifest.xml
           test -s supabase/functions/minefinds-sync/index.ts
 
       - name: Set up Gradle 8.11.1
