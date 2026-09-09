@@ -17,16 +17,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reconstruct MineFinds v1.1.0 source
+      - name: Reconstruct MineFinds v1.1.0 source and apply verified hotfixes
         shell: bash
         run: |
           cat .payload/v110.part* > project.b64
           base64 -d project.b64 > project.tar.gz
           echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
           tar -xzf project.tar.gz
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/hailey/minefinds/MainActivity.java')
+          s = p.read_text()
+          old = '''        new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).setOnShowListener(d -> ((AlertDialog)d).getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); d.dismiss(); refreshWorlds(); })).show();'''
+          new = '''        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
+                  dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); dialog.dismiss(); refreshWorlds(); }));
+                  dialog.show();'''
+          if old not in s:
+              raise SystemExit('Expected broken world dialog pattern not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
           test -f app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
           test -s app/src/main/res/drawable-nodpi/minefinds_boots.png
           grep -F 'jytglrhvkzbsfpizjtrp.supabase.co/functions/v1/minefinds-sync' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'a.put(o);}return a;' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'dialog.setOnShowListener' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          ! grep -F '.setPositiveButton("Save",null).setOnShowListener' app/src/main/java/com/hailey/minefinds/MainActivity.java
 
       - name: Restore permanent MineFinds signing key
         shell: bash
