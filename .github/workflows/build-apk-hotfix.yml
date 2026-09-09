@@ -37,7 +37,7 @@ jobs:
           import base64, re
           from pathlib import Path
           text = Path('/tmp/minefinds-stable-workflow.yml').read_text()
-          key = re.search(r"echo '([^']+)' \\| base64 -d > signing/minefinds\\.keystore", text)
+          key = re.search(r"echo '([^']+)' \| base64 -d > signing/minefinds\.keystore", text)
           password = re.search(r"storePassword '([^']+)'", text)
           alias = re.search(r"keyAlias '([^']+)'", text)
           if not key or not password or not alias:
