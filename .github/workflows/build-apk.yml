@@ -14,41 +14,38 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Reconstruct MineFinds source
+      - name: Reconstruct MineFinds v1.1.0 source
         shell: bash
         run: |
-          cat .payload/project.b64.part* > project.b64
-          echo "4cf59d6f72d604d1d0a91a362b88397a4dc8f6276907523a2ed0e822854379b9  project.b64" | sha256sum -c - || true
-          base64 -d project.b64 > project.tar.gz
-          tar -xzf project.tar.gz
+          echo "8d0c5d9d68ecf9b8e7df581752df0963529f991c2dfcd81c7c55b1f60e70ddc0  .payload/project.tar.gz" | sha256sum -c -
+          tar -xzf .payload/project.tar.gz
+          test -f app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          test -s app/src/main/res/drawable-nodpi/minefinds_boots.png
+          grep -F 'jytglrhvkzbsfpizjtrp.supabase.co/functions/v1/minefinds-sync' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
 
-      - name: Fix world version field
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('app/src/main/java/com/hailey/minefinds/MainActivity.java')
-          s = p.read_text()
-          old = 'Spinner edition = spinner(new String[]{"Bedrock","Java"}); EditText version = field("26.2"); Spinner dimension = spinner(new String[]{"Overworld","Nether","The End"});'
-          new = 'Spinner edition = spinner(new String[]{"Bedrock","Java"}); EditText version = field(""); version.setText("26.2"); Spinner dimension = spinner(new String[]{"Overworld","Nether","The End"});'
-          if old not in s and new not in s:
-              raise SystemExit('Version field source pattern not found')
-          p.write_text(s.replace(old, new))
-          PY
-          grep -F 'version.setText("26.2")' app/src/main/java/com/hailey/minefinds/MainActivity.java
-
-      - name: Install stable MineFinds signing key
+      - name: Restore permanent MineFinds signing key
         shell: bash
         run: |
           mkdir -p signing
-          echo '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' | base64 -d > signing/minefinds.keystore
+          git show f74d3fe41c6df8ad5028ccf5de84c586e49f7f88:.github/workflows/build-apk.yml > /tmp/minefinds-stable-workflow.yml
+          python - <<'PY'
+          import base64, re
+          from pathlib import Path
+          text=Path('/tmp/minefinds-stable-workflow.yml').read_text()
+          m=re.search(r"echo '([A-Za-z0-9+/=]+)' \\| base64 -d > signing/minefinds\\.keystore", text)
+          if not m:
+              raise SystemExit('Permanent MineFinds signing key not found in historical workflow')
+          Path('signing/minefinds.keystore').write_bytes(base64.b64decode(m.group(1)))
+          PY
           keytool -list -keystore signing/minefinds.keystore -storepass 'MineFinds26Local!' -alias minefinds >/dev/null
 
-      - name: Configure stable-signed app version
+      - name: Configure signed v1.1.0
         shell: bash
         run: |
-          cat > app/build.gradle <<'EOF'
+          cat > app/build.gradle <<'EOF_GRADLE'
           plugins {
               id 'com.android.application'
           }
@@ -70,8 +67,8 @@ jobs:
                   applicationId 'com.hailey.minefinds'
                   minSdk 23
                   targetSdk 35
-                  versionCode 2
-                  versionName '1.0.1'
+                  versionCode 3
+                  versionName '1.1.0'
               }
 
               buildTypes {
@@ -80,7 +77,7 @@ jobs:
                   }
               }
           }
-          EOF
+          EOF_GRADLE
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -95,24 +92,35 @@ jobs:
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Run MineFinds core behavior tests
+        shell: bash
         run: |
           mkdir -p core-test-classes
           javac -d core-test-classes \
             app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
             app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
             app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java
           java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
-          grep -F 'version.setText("26.2")' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - name: Verify shared-sync source and branding
+        shell: bash
+        run: |
+          grep -F 'Join Shared World' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Share world' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'DB_VERSION = 2' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
+          grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          test -s supabase/functions/minefinds-sync/index.ts
 
       - name: Set up Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
-      - name: Build installable debug APK
+      - name: Build installable APK
         run: gradle --no-daemon assembleDebug
 
-      - name: Verify APK and signing certificate
+      - name: Verify APK and permanent signing certificate
         shell: bash
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
@@ -122,7 +130,7 @@ jobs:
       - name: Upload MineFinds APK
         uses: actions/upload-artifact@v4
         with:
-          name: MineFinds-APK-v1.0.1
+          name: MineFinds-APK-v1.1.0
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
