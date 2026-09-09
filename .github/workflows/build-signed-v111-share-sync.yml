@@ -1,0 +1,106 @@
+name: Build Signed MineFinds v1.1.1 Share Sync Fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.hotfix/ShareCodePresentation.java'
+      - '.hotfix/ShareCodePresentationTest.java'
+      - '.hotfix/share_ui_patch.py'
+      - '.hotfix/replay_stable_signing_v111.py'
+      - '.github/workflows/build-signed-v111-share-sync.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct v1.1.0 source
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+
+      - name: Apply v1.1.1 share-code fixes
+        shell: bash
+        run: |
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          cp .hotfix/ShareCodePresentation.java app/src/main/java/com/hailey/minefinds/ShareCodePresentation.java
+          cp .hotfix/ShareCodePresentationTest.java app/src/test/java/com/hailey/minefinds/ShareCodePresentationTest.java
+          python .hotfix/share_ui_patch.py
+          grep -F 'Shared World Code' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Show share code' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Copy code' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'syncTicker.postDelayed' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'showSyncProblem("Generate share code"' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - name: Restore permanent MineFinds signing and bump version
+        run: python .hotfix/replay_stable_signing_v111.py
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run core behavior tests
+        shell: bash
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
+            app/src/main/java/com/hailey/minefinds/ShareCodePresentation.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java \
+            app/src/test/java/com/hailey/minefinds/ShareCodePresentationTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+          java -cp core-test-classes com.hailey.minefinds.ShareCodePresentationTest
+
+      - name: Verify update-safe version
+        shell: bash
+        run: |
+          grep -F "versionCode 4" app/build.gradle
+          grep -F "versionName '1.1.1'" app/build.gradle
+          grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build signed APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK and permanent signing certificate
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee apk-cert.txt
+          grep -qi '50d71ad0f4a4c0a68979557a09f62f77e88f0049745c5e6f88a2811c59c08ad5' apk-cert.txt
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload MineFinds v1.1.1 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-v1.1.1-SHARE-SYNC-FIX
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
