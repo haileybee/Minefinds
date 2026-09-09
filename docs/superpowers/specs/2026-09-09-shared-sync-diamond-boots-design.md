@@ -18,31 +18,34 @@ Upgrade the existing private MineFinds Android app so Hailey and Jason can use t
 - Current coordinates are stored per member, not as one global world position.
 - Hailey's phone uses Hailey's current X/Y/Z for Nearby calculations.
 - Jason's phone uses Jason's current X/Y/Z for Nearby calculations.
-- A compact **Players** section may show the latest synced coordinate for each member with a last-updated time.
+- A compact **Players** section shows the latest synced coordinate for each member with a last-updated time.
 
 ### 3. Sync behavior
-- Each phone receives an anonymous app identity so no email/password account is required.
-- Local records receive stable UUIDs so the same find is not duplicated across devices.
-- Create/edit/delete operations are queued locally when offline.
-- Sync runs when the app opens, when returning online, after a local edit, and via pull-to-refresh.
+- Each installation receives a private device identity and random device secret, stored only on that phone.
+- No email/password account is required.
+- Local records receive stable UUIDs so the same world/find is not duplicated across devices.
+- Create/edit/delete operations remain stored locally while offline and upload when connectivity returns.
+- Sync runs when the app opens, after a local edit, and from a **Sync now** button.
 - Conflicts use last-write-wins based on `updated_at` for v1.
 - Deletes are soft-deleted in the cloud so an offline phone cannot accidentally resurrect a deleted find.
 
 ### 4. Private backend
-Use a dedicated new Supabase project for MineFinds only. It must not reuse or modify MoMHQ, PocketRewards, Disabled Veterans to Beekeepers, or any other project.
+Reuse the existing healthy **PocketRewards** Supabase project (`jytglrhvkzbsfpizjtrp`). Do not create another paid Supabase project. MineFinds data must remain isolated from PocketRewards by using only `minefinds_*` tables and a `minefinds-sync` Edge Function. Existing `pr_*` PocketRewards tables must not be modified or deleted.
 
 Cloud tables:
-- `worlds`: id, name, seed, edition, minecraft_version, dimension, created_by, updated_at, deleted_at
-- `world_invites`: world_id, join_code_hash, active, created_at
-- `world_members`: world_id, user_id, display_name, joined_at
-- `finds`: id, world_id, title, category, x, y, z, notes, created_by, updated_by, created_at, updated_at, deleted_at
-- `member_locations`: world_id, user_id, x, y, z, updated_at
+- `minefinds_devices`: device id, hashed device secret, created time
+- `minefinds_worlds`: id, name, seed, edition, minecraft_version, dimension, created_by, updated_at, deleted_at
+- `minefinds_world_invites`: world_id, join_code_hash, active, created_at
+- `minefinds_world_members`: world_id, device_id, display_name, joined_at
+- `minefinds_finds`: id, world_id, name, category, x, y, z, notes, created_by, updated_by, created_at, updated_at, deleted_at
+- `minefinds_member_locations`: world_id, device_id, x, y, z, updated_at
 
 Security:
-- Supabase anonymous authentication for each installation.
-- Row Level Security limits world and find access to members of that world.
-- Plain join codes are never stored; only a hash is stored server-side.
-- Joining a world is handled by a server-side function/RPC so users cannot query invite hashes.
+- The Edge Function uses a per-installation device id + random secret for custom authentication.
+- Only a SHA-256 hash of each device secret is stored server-side.
+- RLS is enabled on all MineFinds tables with no public client policies; the Edge Function performs authorized operations with the service role.
+- Plain join codes are never stored in Supabase; only a SHA-256 hash is stored server-side.
+- The `minefinds-sync` Edge Function verifies world membership before returning or changing world data.
 
 ### 5. Existing MineFinds behavior retained
 - Permanent local storage across sessions.
@@ -58,8 +61,8 @@ Security:
 Use the approved pair of bright cyan/blue voxel diamond boots as the central MineFinds travel symbol.
 
 Brand application:
-- Launcher icon: boots only, centered and cropped for Android adaptive icon safety.
-- Splash screen: boots plus MineFinds wordmark.
+- Launcher icon: boots only, centered and cropped for Android icon safety.
+- Android system splash: the same boots launcher icon.
 - In-app header: smaller boots plus MineFinds name.
 - Recent-apps thumbnail uses the same launcher icon through Android app metadata.
 - Keep the existing dark, blocky visual direction, but replace the temporary pickaxe branding.
@@ -68,19 +71,19 @@ Brand application:
 - Continue using the permanent MineFinds signing key established in v1.0.1.
 - Increase versionCode/versionName for every new APK.
 - Do not require uninstalling v1.0.1 for this update.
-- Database migrations must preserve all existing local worlds/finds.
+- SQLite migration from database version 1 to version 2 must preserve all existing local worlds and finds.
 
 ## Error handling
 - Offline: show **Saved on this phone • Waiting to sync** rather than blocking the user.
-- Invalid/expired join code: clear inline message, no partial world creation.
-- Sync failure: keep local data, retry later, and show last successful sync time.
+- Invalid/expired join code: clear message and no partial world creation.
+- Sync failure: keep local data, retry later, and show the failure without deleting anything.
 - Unauthorized membership: never expose the world or its finds.
 - Duplicate join attempt: treat as already joined rather than creating duplicate membership.
 
 ## Testing
 - Unit tests for distance math, Seed Map URLs, join-code formatting, sync merge rules, and soft-delete behavior.
-- SQLite migration test from the current schema to the shared-sync schema.
-- Instrumented/logic tests for create world, join world, add/edit/delete find, offline queue, and resync.
+- Migration checks confirm the version 1 tables are upgraded instead of dropped.
+- Backend acceptance checks cover device registration, create/share/join, find syncing, location syncing, and rejected unauthorized access.
 - CI must build the APK, verify it exists, and verify the permanent signing certificate before publishing the artifact.
 - Manual two-device acceptance flow: phone A creates/shares a world, phone B joins, each adds a find, each sees the other's find, Nearby remains based on each phone's own coordinates.
 
@@ -93,4 +96,5 @@ The build is ready when:
 5. Offline logging still works and later syncs.
 6. Nearby is calculated from the current user/device's own coordinates.
 7. The app launcher, splash, and in-app logo consistently use the approved diamond boots branding.
-8. The APK passes CI build/tests and permanent signing verification.
+8. PocketRewards `pr_*` tables remain untouched.
+9. The APK passes CI build/tests and permanent signing verification.
