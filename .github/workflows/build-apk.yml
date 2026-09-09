@@ -19,9 +19,9 @@ jobs:
         shell: bash
         run: |
           cat .payload/project.b64.part* > project.b64
-          echo "475871c8ed733f68fa808c629f59a74ab65ae06b344f88231e3d15df350f1c6e  project.b64" | sha256sum -c -
+          echo "97400fa27794c183da3604d2822b07a041b857417719eb7e2633856605a1c60b  project.b64" | sha256sum -c -
           base64 -d project.b64 > project.tar.gz
-          echo "af8f30c19c5d86f22fc357e21f9d8115ff865be02906b735441d2355d890b2ce  project.tar.gz" | sha256sum -c -
+          echo "27d4e83e0a5d0404ff741502d138c2581c6d8e79c3b33eca50e38211b18bd9c3  project.tar.gz" | sha256sum -c -
           tar -xzf project.tar.gz
 
       - name: Set up Java 17
