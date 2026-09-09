@@ -1,0 +1,136 @@
+name: Build MineFinds APK Hotfix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct MineFinds v1.1.0 source
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'a.put(o);}return a;' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'jytglrhvkzbsfpizjtrp.supabase.co/functions/v1/minefinds-sync' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+
+      - name: Restore permanent MineFinds signing configuration
+        shell: bash
+        run: |
+          mkdir -p signing
+          git show f74d3fe41c6df8ad5028ccf5de84c586e49f7f88:.github/workflows/build-apk.yml > /tmp/minefinds-stable-workflow.yml
+          python - <<'PY'
+          import base64, re
+          from pathlib import Path
+          text = Path('/tmp/minefinds-stable-workflow.yml').read_text()
+          key = re.search(r"echo '([^']+)' \\| base64 -d > signing/minefinds\\.keystore", text)
+          password = re.search(r"storePassword '([^']+)'", text)
+          alias = re.search(r"keyAlias '([^']+)'", text)
+          if not key or not password or not alias:
+              raise SystemExit('Permanent MineFinds signing configuration not found in historical workflow')
+          Path('signing/minefinds.keystore').write_bytes(base64.b64decode(key.group(1)))
+          gradle = f'''plugins {{
+              id 'com.android.application'
+          }}
+
+          android {{
+              namespace 'com.hailey.minefinds'
+              compileSdk 35
+
+              signingConfigs {{
+                  mineFindsStable {{
+                      storeFile file('../signing/minefinds.keystore')
+                      storePassword {password.group(1)!r}
+                      keyAlias {alias.group(1)!r}
+                      keyPassword {password.group(1)!r}
+                  }}
+              }}
+
+              defaultConfig {{
+                  applicationId 'com.hailey.minefinds'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 3
+                  versionName '1.1.0'
+              }}
+
+              buildTypes {{
+                  debug {{
+                      signingConfig signingConfigs.mineFindsStable
+                  }}
+              }}
+          }}
+          '''
+          Path('app/build.gradle').write_text(gradle)
+          PY
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run MineFinds core behavior tests
+        shell: bash
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+
+      - name: Verify shared-sync source and branding
+        shell: bash
+        run: |
+          grep -F 'Join Shared World' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Share world' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'DB_VERSION = 2' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
+          grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          grep -F '@drawable/minefinds_boots' app/src/main/AndroidManifest.xml
+          test -s supabase/functions/minefinds-sync/index.ts
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build installable APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK and permanent signing certificate
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee apk-cert.txt
+          grep -qi '50d71ad0f4a4c0a68979557a09f62f77e88f0049745c5e6f88a2811c59c08ad5' apk-cert.txt
+
+      - name: Upload MineFinds APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-APK-v1.1.0-HOTFIX
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
