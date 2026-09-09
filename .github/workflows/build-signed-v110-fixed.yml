@@ -1,0 +1,102 @@
+name: Build Signed MineFinds v1.1.0 Fixed
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct source and apply verified hotfixes
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/hailey/minefinds/MainActivity.java')
+          s = p.read_text()
+          old = '''        new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).setOnShowListener(d -> ((AlertDialog)d).getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); d.dismiss(); refreshWorlds(); })).show();'''
+          new = '''        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("New Minecraft world").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
+                  dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { String n=name.getText().toString().trim(),s=seed.getText().toString().trim(),ver=version.getText().toString().trim(); if(n.isEmpty()||s.isEmpty()||ver.isEmpty()){toast("World name, seed, and version are required");return;} db.addWorld(n,s,String.valueOf(edition.getSelectedItem()),ver,String.valueOf(dimension.getSelectedItem())); dialog.dismiss(); refreshWorlds(); }));
+                  dialog.show();'''
+          if old not in s:
+              raise SystemExit('Expected broken world dialog pattern not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -F 'a.put(o);}return a;' app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          grep -F 'dialog.setOnShowListener' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - name: Restore established MineFinds signing setup
+        run: python .hotfix/replay_stable_signing.py
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run core tests
+        shell: bash
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+
+      - name: Verify shared features and branding
+        shell: bash
+        run: |
+          grep -F 'Join Shared World' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Share world' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'DB_VERSION = 2' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
+          grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          grep -F '@drawable/minefinds_boots' app/src/main/AndroidManifest.xml
+          grep -F "versionCode 3" app/build.gradle
+          grep -F "versionName '1.1.0'" app/build.gradle
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee apk-cert.txt
+          grep -qi '50d71ad0f4a4c0a68979557a09f62f77e88f0049745c5e6f88a2811c59c08ad5' apk-cert.txt
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-v1.1.0-SIGNED-FIXED
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
