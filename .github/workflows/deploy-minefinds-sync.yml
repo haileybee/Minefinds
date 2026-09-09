@@ -55,4 +55,4 @@ jobs:
           echo "minefinds-sync did not become reachable after deployment"
           exit 1
 
-# retrigger after configuring SUPABASE_ACCESS_TOKEN
+# retrigger after configuring corrected SUPABASE_ACCESS_TOKEN
