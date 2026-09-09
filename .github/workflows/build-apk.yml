@@ -1,0 +1,65 @@
+name: Build MineFinds APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Reconstruct MineFinds source
+        shell: bash
+        run: |
+          cat .payload/project.b64.part* > project.b64
+          echo "475871c8ed733f68fa808c629f59a74ab65ae06b344f88231e3d15df350f1c6e  project.b64" | sha256sum -c -
+          base64 -d project.b64 > project.tar.gz
+          echo "af8f30c19c5d86f22fc357e21f9d8115ff865be02906b735441d2355d890b2ce  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run MineFinds core behavior tests
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build installable debug APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK exists
+        run: test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload MineFinds APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
