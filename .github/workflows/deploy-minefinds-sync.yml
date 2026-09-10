@@ -76,29 +76,35 @@ jobs:
               -d "$body" "$endpoint"
           }
 
-          echo '1/5 register first device'
+          echo '1/6 register first device'
           r="$(call "$d1" "$s1" '{"op":"register"}')"
           echo "$r"
           echo "$r" | jq -e '.ok == true' >/dev/null
 
-          echo '2/5 create shared world'
-          r="$(call "$d1" "$s1" "{\"op\":\"create_world\",\"display_name\":\"SmokeA\",\"world\":{\"id\":\"$world\",\"name\":\"MineFinds smoke test\",\"seed\":\"123\",\"edition\":\"Bedrock\",\"minecraft_version\":\"26.2\",\"dimension\":\"Overworld\",\"created_at\":$now,\"updated_at\":$now}}")"
+          echo '2/6 create shared world'
+          create_body="{\"op\":\"create_world\",\"display_name\":\"SmokeA\",\"world\":{\"id\":\"$world\",\"name\":\"MineFinds smoke test\",\"seed\":\"123\",\"edition\":\"Bedrock\",\"minecraft_version\":\"26.2\",\"dimension\":\"Overworld\",\"created_at\":$now,\"updated_at\":$now}}"
+          r="$(call "$d1" "$s1" "$create_body")"
           echo "$r"
           echo "$r" | jq -e '.ok == true and .world.id == $w' --arg w "$world" >/dev/null
 
-          echo '3/5 generate share code'
+          echo '3/6 retry same shared-world creation'
+          r="$(call "$d1" "$s1" "$create_body")"
+          echo "$r"
+          echo "$r" | jq -e '.ok == true and .world.id == $w' --arg w "$world" >/dev/null
+
+          echo '4/6 generate share code'
           r="$(call "$d1" "$s1" "{\"op\":\"share_world\",\"world_id\":\"$world\"}")"
           echo "$r"
           code="$(echo "$r" | jq -r '.join_code // empty')"
           test "${#code}" -eq 8
           echo "Share code generated: $code"
 
-          echo '4/5 register second device'
+          echo '5/6 register second device'
           r="$(call "$d2" "$s2" '{"op":"register"}')"
           echo "$r"
           echo "$r" | jq -e '.ok == true' >/dev/null
 
-          echo '5/5 join second device using share code'
+          echo '6/6 join second device using share code'
           r="$(call "$d2" "$s2" "{\"op\":\"join_world\",\"join_code\":\"$code\",\"display_name\":\"SmokeB\"}")"
           echo "$r"
           echo "$r" | jq -e '.ok == true and .world.id == $w and (.players | length) >= 2' --arg w "$world" >/dev/null
