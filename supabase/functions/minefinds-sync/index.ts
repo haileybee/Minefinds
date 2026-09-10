@@ -80,7 +80,7 @@ async function bundle(worldId: string) {
 Deno.serve(async (req) => {
   try {
     if (req.method === "OPTIONS") return json({ ok: true });
-    if (req.method === "GET") return json({ ok: true, service: "minefinds-sync", version: "1.1.0" });
+    if (req.method === "GET") return json({ ok: true, service: "minefinds-sync", version: "1.1.1" });
     if (req.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
 
     const body = await req.json().catch(() => ({}));
@@ -93,7 +93,7 @@ Deno.serve(async (req) => {
       const worldId = text(w.id, 60);
       if (!uuid(worldId)) return json({ ok: false, error: "Invalid world id" }, 400);
       const displayName = text(body?.display_name, 60) || "Player";
-      const { data: existing, error: ee } = await db.from("minefinds_worlds").select("id,updated_at").eq("id", worldId).maybeSingle();
+      const { data: existing, error: ee } = await db.from("minefinds_worlds").select("id,updated_at,created_by").eq("id", worldId).maybeSingle();
       if (ee) throw new Error(ee.message);
       if (existing) await member(worldId, deviceId);
       const now = Date.now();
@@ -106,11 +106,11 @@ Deno.serve(async (req) => {
           edition: text(w.edition, 30) || "Bedrock",
           minecraft_version: text(w.minecraft_version, 40) || "26.2",
           dimension: text(w.dimension, 40) || "Overworld",
+          created_by: existing?.created_by ?? deviceId,
           created_at: Math.max(int(w.created_at, now), 1),
           updated_at: updatedAt,
           deleted_at: w.deleted_at == null ? null : int(w.deleted_at),
         };
-        if (!existing) row.created_by = deviceId;
         const { error } = await db.from("minefinds_worlds").upsert(row, { onConflict: "id" });
         if (error) throw new Error(error.message);
       }
