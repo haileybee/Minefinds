@@ -1,0 +1,44 @@
+name: Diagnose MineFinds Find Entry
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diagnose-find-entry.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct current app source
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          cp .hotfix/ShareCodePresentation.java app/src/main/java/com/hailey/minefinds/ShareCodePresentation.java
+          python .hotfix/share_ui_patch.py
+
+      - name: Print find-entry and sync code
+        shell: bash
+        run: |
+          echo '=== MAINACTIVITY FIND-RELATED MATCHES ==='
+          grep -n -E 'Log Find|log find|addFind|show.*Find|FindDialog|setTitle\(".*Find|syncActiveWorld|periodicSync|showNearby\(' app/src/main/java/com/hailey/minefinds/MainActivity.java || true
+          echo '=== MAINACTIVITY AROUND LOG FIND ==='
+          line=$(grep -n -m1 -E 'Log Find|setTitle\(".*Find' app/src/main/java/com/hailey/minefinds/MainActivity.java | cut -d: -f1 || true)
+          if [ -n "$line" ]; then start=$((line>35?line-35:1)); end=$((line+110)); sed -n "${start},${end}p" app/src/main/java/com/hailey/minefinds/MainActivity.java; fi
+          echo '=== DATABASE FIND METHODS ==='
+          grep -n -E 'addFind|insert.*find|deleteFind|getAllFinds|updated_at|deleted_at' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java || true
+          echo '=== DATABASE SOURCE AROUND addFind ==='
+          line=$(grep -n -m1 'addFind' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java | cut -d: -f1 || true)
+          if [ -n "$line" ]; then start=$((line>25?line-25:1)); end=$((line+90)); sed -n "${start},${end}p" app/src/main/java/com/hailey/minefinds/DatabaseHelper.java; fi
