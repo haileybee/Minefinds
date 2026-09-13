@@ -1,0 +1,123 @@
+name: Build Signed MineFinds v1.1.2 Find Stability
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.hotfix/FindSyncUiPolicy.java'
+      - '.hotfix/FindSyncUiPolicyTest.java'
+      - '.hotfix/find_stability_patch.py'
+      - '.hotfix/replay_stable_signing_v112.py'
+      - '.github/workflows/build-signed-v112-find-stability.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct v1.1.0 source
+        shell: bash
+        run: |
+          cat .payload/v110.part* > project.b64
+          base64 -d project.b64 > project.tar.gz
+          echo "fe8af9f74133d38e9d47e41d8e2d6759567790f7fc6c9a5a15ae9460bfa16673  project.tar.gz" | sha256sum -c -
+          tar -xzf project.tar.gz
+
+      - name: Apply v1.1.1 sharing baseline
+        shell: bash
+        run: |
+          cp .hotfix/MineFindsSyncClient.java app/src/main/java/com/hailey/minefinds/MineFindsSyncClient.java
+          cp .hotfix/ShareCodePresentation.java app/src/main/java/com/hailey/minefinds/ShareCodePresentation.java
+          cp .hotfix/ShareCodePresentationTest.java app/src/test/java/com/hailey/minefinds/ShareCodePresentationTest.java
+          python .hotfix/share_ui_patch.py
+
+      - name: Apply v1.1.2 find stability fix
+        shell: bash
+        run: |
+          cp .hotfix/FindSyncUiPolicy.java app/src/main/java/com/hailey/minefinds/FindSyncUiPolicy.java
+          cp .hotfix/FindSyncUiPolicyTest.java app/src/test/java/com/hailey/minefinds/FindSyncUiPolicyTest.java
+          python .hotfix/find_stability_patch.py
+          grep -F 'FindSyncUiPolicy.shouldRefreshAfterSync(loud)' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'Find saved on this phone' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'showNearby();' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          ! grep -F 'if(loud)toast("Shared world synced"); showNearby();' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - name: Restore permanent MineFinds signing and bump version
+        run: python .hotfix/replay_stable_signing_v112.py
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Run behavior and regression tests
+        shell: bash
+        run: |
+          mkdir -p core-test-classes
+          javac -d core-test-classes \
+            app/src/main/java/com/hailey/minefinds/DistanceUtils.java \
+            app/src/main/java/com/hailey/minefinds/SeedMapUrl.java \
+            app/src/main/java/com/hailey/minefinds/JoinCodeUtils.java \
+            app/src/main/java/com/hailey/minefinds/SyncMergeUtils.java \
+            app/src/main/java/com/hailey/minefinds/ShareCodePresentation.java \
+            app/src/main/java/com/hailey/minefinds/FindSyncUiPolicy.java \
+            app/src/test/java/com/hailey/minefinds/CoreBehaviorTest.java \
+            app/src/test/java/com/hailey/minefinds/ShareCodePresentationTest.java \
+            app/src/test/java/com/hailey/minefinds/FindSyncUiPolicyTest.java
+          java -cp core-test-classes com.hailey.minefinds.CoreBehaviorTest
+          java -cp core-test-classes com.hailey.minefinds.ShareCodePresentationTest
+          java -cp core-test-classes com.hailey.minefinds.FindSyncUiPolicyTest
+
+      - name: Verify local-first persistence behavior
+        shell: bash
+        run: |
+          grep -F 'return getWritableDatabase().insertOrThrow("finds",null,v);' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
+          grep -F 'if(localId!=null && updatedAt<localUpdated)return;' app/src/main/java/com/hailey/minefinds/DatabaseHelper.java
+          grep -F 'showNearby();' app/src/main/java/com/hailey/minefinds/MainActivity.java
+          grep -F 'if(activeWorld.shared) syncActiveWorld(false);' app/src/main/java/com/hailey/minefinds/MainActivity.java
+
+      - name: Verify update-safe version
+        shell: bash
+        run: |
+          grep -F "versionCode 5" app/build.gradle
+          grep -F "versionName '1.1.2'" app/build.gradle
+          grep -F 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build signed APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Verify APK and permanent signing certificate
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk | tee apk-cert.txt
+          grep -qi '50d71ad0f4a4c0a68979557a09f62f77e88f0049745c5e6f88a2811c59c08ad5' apk-cert.txt
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload MineFinds v1.1.2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MineFinds-v1.1.2-FIND-STABILITY
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
