@@ -1,0 +1,26 @@
+name: Test MineFinds v1.1.2 Find Stability
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.hotfix/FindSyncUiPolicyTest.java'
+      - '.hotfix/FindSyncUiPolicy.java'
+      - '.hotfix/find_stability_patch.py'
+      - '.github/workflows/test-v112-find-stability.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile regression test
+        shell: bash
+        run: |
+          mkdir -p test-classes
+          javac -d test-classes .hotfix/FindSyncUiPolicy.java .hotfix/FindSyncUiPolicyTest.java
+          java -cp test-classes com.hailey.minefinds.FindSyncUiPolicyTest
