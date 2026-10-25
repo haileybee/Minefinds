@@ -20,7 +20,7 @@
 <body>
 
 <div id="demo-banner" class="demo-banner" hidden>
-  LOCAL DEMO MODE — no account yet. Data is saved only in this browser so you can test everything.
+  LOCAL DEMO MODE — test accounts and data live only in this browser, so you can try everything. Nothing is shared with anyone.
 </div>
 
 <header class="app-header">
@@ -28,13 +28,16 @@
   <button id="logout-btn" class="btn btn-small btn-ghost" hidden>Log out</button>
 </header>
 
-<!-- ======================= LOGIN ======================= -->
+<!-- ======================= LOGIN / SIGN UP ======================= -->
 <main id="login-view" class="view" hidden>
   <section class="card">
-    <h2>Family login</h2>
-    <p class="hint">One shared login for Hailey and Jason. This is a MineFinds-only
-    login — it is not a Muse, Meta, or Gmail login.</p>
+    <h2>Welcome to MineFinds</h2>
+    <p class="hint">Log in with your own email, or create a free account.
+    Your worlds are yours — every world has a sync code, and anyone you
+    give that code to can join the world and share its lists.</p>
+
     <form id="login-form">
+      <h3>Log in</h3>
       <label>Email
         <input type="email" id="login-email" autocomplete="username" required>
       </label>
@@ -46,38 +49,107 @@
     </form>
     <button id="forgot-btn" class="btn btn-ghost">Forgot password?</button>
     <p id="forgot-msg" class="hint"></p>
-    <!--
-      FIRST-RUN SETUP NOTE (no public sign-up):
-      There is deliberately NO sign-up form in this app for normal use.
-      The ONE shared family account is created once, by Hailey, either
-      in the Supabase dashboard (Authentication -> Users -> Add user)
-      or by temporarily enabling sign-up before the family account
-      exists and disabling it again right after. Never share the
-      password in chat — Hailey sets it herself and gives it to Jason
-      directly.
-    -->
+
+    <hr class="auth-divider">
+
+    <form id="signup-form">
+      <h3>New here? Create your account</h3>
+      <label>Email
+        <input type="email" id="signup-email" autocomplete="email" required>
+      </label>
+      <label>Password
+        <input type="password" id="signup-password" autocomplete="new-password" required>
+      </label>
+      <button type="submit" class="btn btn-big">Sign up</button>
+      <p id="signup-error" class="error" role="alert"></p>
+      <p id="signup-msg" class="hint"></p>
+    </form>
+    <p class="hint">Use a password just for MineFinds — and never share it in chat.</p>
   </section>
 </main>
 
 <!-- ======================= APP ======================= -->
 <main id="app-view" class="view" hidden>
 
-  <section class="card seed-card">
-    <div class="seed-row">
-      <div><span class="seed-label">World seed</span>
-      <span id="seed-display" class="seed-value">—</span></div>
-      <button id="seed-edit-btn" class="btn btn-small">Edit seed</button>
+  <!-- World picker / creator / join-by-code. Everything below the tabs is
+       scoped to the world chosen here: its name, its seed, its lists. -->
+  <section class="card world-card">
+    <h2>Your worlds</h2>
+    <label>Current world
+      <select id="world-select"></select>
+    </label>
+    <p id="world-empty" class="hint" hidden>You don't have a world yet. Create one below, or join somebody's world with its sync code.</p>
+
+    <div id="world-details">
+      <div class="seed-row">
+        <div><span class="seed-label">World name</span>
+        <span id="world-name-display" class="seed-value">—</span></div>
+        <button id="world-rename-btn" class="btn btn-small">Rename</button>
+      </div>
+      <form id="world-rename-form" hidden>
+        <label>World name
+          <input type="text" id="world-name-input" autocomplete="off" required>
+        </label>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Save name</button>
+          <button type="button" id="world-rename-cancel" class="btn">Cancel</button>
+        </div>
+      </form>
+      <p class="hint"><span id="world-role" class="badge"></span> <span id="world-members"></span></p>
+
+      <div class="seed-row">
+        <div><span class="seed-label">World seed</span>
+        <span id="seed-display" class="seed-value">—</span></div>
+        <button id="seed-edit-btn" class="btn btn-small">Edit seed</button>
+      </div>
+      <form id="seed-form" hidden>
+        <label>Seed
+          <input type="text" id="seed-input" inputmode="text" autocomplete="off">
+        </label>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Save seed</button>
+          <button type="button" id="seed-cancel-btn" class="btn">Cancel</button>
+        </div>
+      </form>
+      <a id="chunkbase-link" class="btn btn-linklike" href="#" target="_blank" rel="noopener">Open this seed in Chunkbase Seed Map ↗</a>
+
+      <div class="seed-row">
+        <div><span class="seed-label">Sync code</span>
+        <span id="sync-code-display" class="seed-value sync-code">—</span></div>
+        <button id="sync-copy-btn" class="btn btn-small">Copy code</button>
+      </div>
+      <p class="hint">Anyone with this code can join this world from their own account and add to its lists — only share it with people you trust.</p>
     </div>
-    <form id="seed-form" hidden>
-      <label>Seed
-        <input type="text" id="seed-input" inputmode="text" autocomplete="off">
+
+    <div class="btn-row">
+      <button type="button" id="new-world-btn" class="btn">＋ New world</button>
+      <button type="button" id="join-world-btn" class="btn">Join with a code</button>
+    </div>
+    <form id="new-world-form" hidden>
+      <h3>Create a world</h3>
+      <label>World name
+        <input type="text" id="new-world-name" autocomplete="off" required placeholder="My World">
+      </label>
+      <label>Seed (optional — you can add it later)
+        <input type="text" id="new-world-seed" inputmode="text" autocomplete="off">
       </label>
       <div class="btn-row">
-        <button type="submit" class="btn btn-primary">Save seed</button>
-        <button type="button" id="seed-cancel-btn" class="btn">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create world</button>
+        <button type="button" id="new-world-cancel" class="btn">Cancel</button>
       </div>
+      <p id="new-world-error" class="error" role="alert"></p>
     </form>
-    <a id="chunkbase-link" class="btn btn-linklike" href="#" target="_blank" rel="noopener">Open this seed in Chunkbase Seed Map ↗</a>
+    <form id="join-world-form" hidden>
+      <h3>Join a world</h3>
+      <label>Sync code
+        <input type="text" id="join-code" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="e.g. K7QX2M9P">
+      </label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Join world</button>
+        <button type="button" id="join-world-cancel" class="btn">Cancel</button>
+      </div>
+      <p id="join-error" class="error" role="alert"></p>
+    </form>
   </section>
 
   <nav class="tabs" role="tablist">
@@ -102,9 +174,12 @@
         </select>
       </label>
       <div class="coord-row">
-        <label>X <input type="number" id="find-x" step="1" required></label>
-        <label>Y <input type="number" id="find-y" step="1" required></label>
-        <label>Z <input type="number" id="find-z" step="1" required></label>
+        <!-- Coordinates are type="text" + inputmode="numeric" on purpose:
+             type="number" makes many phone keyboards hide the minus key,
+             so negative Minecraft coordinates could not be typed at all. -->
+        <label>X <input type="text" id="find-x" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" required></label>
+        <label>Y <input type="text" id="find-y" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" required></label>
+        <label>Z <input type="text" id="find-z" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false" required></label>
       </div>
       <div id="nearby-box" class="nearby" hidden></div>
       <label>Note (optional)
@@ -230,9 +305,9 @@
         <select id="nether-find-picker"><option value="">— type coords below —</option></select>
       </label>
       <div class="coord-row">
-        <label>X <input type="number" id="nether-x" step="1"></label>
-        <label>Y <input type="number" id="nether-y" step="1"></label>
-        <label>Z <input type="number" id="nether-z" step="1"></label>
+        <label>X <input type="text" id="nether-x" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false"></label>
+        <label>Y <input type="text" id="nether-y" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false"></label>
+        <label>Z <input type="text" id="nether-z" inputmode="numeric" pattern="-?[0-9]*" autocomplete="off" autocorrect="off" spellcheck="false"></label>
       </div>
       <div id="nether-result" class="calc-result" aria-live="polite"></div>
       <div class="btn-row">

@@ -1,19 +1,26 @@
 -- ============================================================================
 -- MineFinds — migration import (run ONCE, AFTER supabase-setup.sql AND
--- AFTER Hailey has created the single shared family account, in the
--- Supabase SQL Editor).
+-- AFTER at least one person has signed up in the app, in the Supabase
+-- SQL Editor).
 --
--- It attaches everything to the earliest-created auth user (the family
--- account) and inserts Hailey's EXACT saved data from the Oct 24, 2026
+-- NEW multi-user design: the world created here belongs to the earliest
+-- signed-up auth user (at import time there should be exactly one account
+-- — Hailey's — which is why the import runs right after she signs up and
+-- BEFORE anyone else is invited). The world is named "My World" (she can
+-- rename it in the app any time) and gets a generated sync code from the
+-- worlds table default, so Jason — or anyone she shares the code with —
+-- can join it from their own account.
+--
+-- Data inserted is Hailey's EXACT saved data from the Oct 24, 2026
 -- migration snapshot:
---   1 world, seed -5701622969722961025, 2 finds, 1 build video, 1 need item,
---   and 1 lore entry (Day 1 — finding Princess Peach).
+--   1 world ("My World", seed -5701622969722961025), 2 finds, 1 build
+--   video, 1 need item, and 1 lore entry (Day 1 — finding Princess Peach).
 -- NO invented data. Princess Peach the pink sheep has NO logged
 -- coordinates and is deliberately NOT a row in finds; she appears only
 -- as the Day 1 lore entry below, exactly as Hailey told it.
 --
--- Idempotent-ish: it skips the import if a world already exists for the
--- family account, so running it twice will not duplicate the lists.
+-- Idempotent-ish: it skips the import if that first account already owns
+-- a world, so running it twice will not duplicate the lists.
 -- ============================================================================
 
 do $$
@@ -23,21 +30,21 @@ declare
 begin
   select id into v_owner from auth.users order by created_at asc limit 1;
   if v_owner is null then
-    raise exception 'No auth user found. Create the shared family account first (plan Phase 4, Step 18), then re-run this file.';
+    raise exception 'No auth user found. Sign up in the MineFinds app first (your own email + password), then re-run this file.';
   end if;
 
   select id into v_world from public.worlds where owner_id = v_owner limit 1;
   if v_world is not null then
-    raise notice 'A world already exists for the family account (%) — import skipped, nothing duplicated.', v_owner;
+    raise notice 'The first account already owns a world (%) — import skipped, nothing duplicated.', v_world;
     return;
   end if;
 
-  insert into public.worlds (owner_id, name) values (v_owner, null)
+  -- The world: name + seed live on the worlds row. The sync_code column
+  -- default generates a fresh unique code, and the worlds trigger adds
+  -- the owner to world_members automatically.
+  insert into public.worlds (owner_id, name, seed)
+  values (v_owner, 'My World', '-5701622969722961025')
   returning id into v_world;
-
-  -- Seed (single home: settings.seed)
-  insert into public.settings (world_id, seed)
-  values (v_world, '-5701622969722961025');
 
   -- Finds — exact snapshot values
   insert into public.finds (world_id, name, dimension, x, y, z, note) values
@@ -58,5 +65,5 @@ begin
     (v_world, 1, 'Found Princess Peach, the rare pink sheep',
      'Day 1: I found a rare pink sheep — she had spawned naturally, which almost never happens (about a 0.164% chance). I named her Princess Peach.');
 
-  raise notice 'MineFinds migration imported for world %: seed + 2 finds + 1 build video + 1 need item + 1 lore entry.', v_world;
+  raise notice 'MineFinds migration imported: world "My World" (%) with seed + 2 finds + 1 build video + 1 need item + 1 lore entry. Find its sync code in the app (or in the worlds table) to invite others.', v_world;
 end $$;

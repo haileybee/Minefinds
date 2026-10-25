@@ -105,3 +105,9 @@ input:focus, select:focus, textarea:focus { outline: 3px solid #a8d86e; outline-
 }
 .empty { color: #c9d6b4; font-style: italic; margin: 8px 0 14px; }
 a { color: #a8d86e; }
+
+/* Worlds + accounts (multi-world design) */
+.world-card .seed-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.sync-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .14em; }
+#world-select { font-weight: 700; }
+.auth-divider { border: none; border-top: 1px solid #3d5628; margin: 22px 0; }

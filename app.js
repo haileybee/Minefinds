@@ -1,9 +1,20 @@
 "use strict";
 /* ============================================================================
    MineFinds standalone — plain JS, no build step.
+
+   DESIGN (Oct 25, 2026 — personal accounts + named worlds + sync codes):
+     * Anyone signs up with their OWN email + password (Supabase Auth).
+     * Each person can have MULTIPLE worlds. Every world has a NAME and a
+       SEED, and everything (Finds, Builds, Stacks, Nether, Lore, and the
+       Chunkbase link) is scoped to the world picked at the top.
+     * Every world has a SYNC CODE. Somebody else who is signed in can type
+       the code to JOIN that world; members then share the same lists.
+
    Backend switch: if config.js still holds placeholders -> LOCAL DEMO MODE
-   (localStorage, seeded with the migration data). If real Supabase values are
-   in config.js -> Supabase Auth + database. Config-only change.
+   (localStorage). Demo mode mirrors the SAME design — fake accounts, named
+   worlds, sync codes, joining — with data only in this browser, so all of
+   it can be tested before/without a real backend. If real Supabase values
+   are in config.js -> Supabase Auth + database. Config-only change.
    ========================================================================== */
 
 // ---------- Pure math (also used by the local tests) ----------
@@ -29,14 +40,31 @@ function stackText(m) {
 function overworldToNether(x, y, z) { return { x: Math.floor(x / 8), y: Math.floor(y), z: Math.floor(z / 8) }; }
 function netherToOverworld(x, y, z) { return { x: Math.floor(x) * 8, y: Math.floor(y), z: Math.floor(z) * 8 }; }
 function dist3d(a, b) { return Math.round(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)); }
+// Strict whole-number coordinate parser: "-280" -> -280, "" / "-" / "abc" -> NaN.
+// Used for every coordinate field now that they are text inputs (so phone
+// keyboards show a minus key — see index.html). Junk therefore can never be
+// saved as a coordinate; it is treated as "not typed yet", like an empty box.
+function parseCoord(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!/^-?\d+$/.test(s)) return NaN;
+  return parseInt(s, 10);
+}
 function youtubeId(url) {
   if (!url) return null;
   const m = String(url).match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
   return m ? m[1] : null;
 }
+// Sync codes: 8 characters, no look-alikes (no 0/O, 1/I/L) — same alphabet
+// as the database-side generator in supabase-setup.sql.
+const SYNC_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+function genSyncCode() {
+  let code = "";
+  for (let i = 0; i < 8; i++) code += SYNC_CODE_ALPHABET[Math.floor(Math.random() * SYNC_CODE_ALPHABET.length)];
+  return code;
+}
 // Expose pure helpers for headless tests.
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stackMath, stackText, overworldToNether, netherToOverworld, dist3d, youtubeId };
+  module.exports = { stackMath, stackText, overworldToNether, netherToOverworld, dist3d, youtubeId, parseCoord, genSyncCode };
 }
 /* Browser-only code below. In a headless Node test run, `document` is
    undefined and this whole block is skipped (a top-level `return` would be
@@ -50,7 +78,12 @@ let sb = null;
 if (!DEMO && window.supabase) sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
 // ---------- Migration seed data (demo mode) — exact snapshot values ----------
+// This becomes the FIRST demo account's world "My World", the same data
+// migration-import.sql gives the first real account. No invented data:
+// Princess Peach is a Day 1 lore entry only — she has no coordinates and
+// is never a find.
 const MIGRATION = {
+  name: "My World",
   seed: "-5701622969722961025",
   finds: [
     { id: "find-1", name: "Iron farm/ spawn", dimension: "Overworld", x: 0, y: 66, z: 0, note: "Iron farm" },
@@ -68,38 +101,191 @@ const MIGRATION = {
       created_at: "2026-10-24", updated_at: "2026-10-24" },
   ],
 };
+const blankLists = () => ({ seed: "", finds: [], videos: [], needs: [], lore: [] });
 
 // ---------- Store abstraction ----------
-const LS_KEY = "minefinds_demo_v1";
+// One Store for the whole app. `Store.state` always holds the CURRENT
+// world's lists ({seed, finds, videos, needs, lore}); switching worlds
+// re-points it. `Store.worlds` holds the signed-in person's worlds
+// ({id, name, seed, sync_code, owner_id, role, memberCount}).
+const LS_KEY = "minefinds_demo_v2";       // demo database (accounts+worlds)
+const LS_WORLD_KEY = "minefinds_last_world"; // last world picked on this device
 let worldId = null;
 const Store = {
-  state: null,
-  loadDemo() {
-    try { this.state = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { this.state = null; }
-    if (!this.state) { this.state = JSON.parse(JSON.stringify(MIGRATION)); this.saveDemo(); }
-    // Older demo saves (from before the Lore tab existed) have no lore list —
-    // give them the seeded Day 1 entry instead of breaking.
-    if (!Array.isArray(this.state.lore)) { this.state.lore = JSON.parse(JSON.stringify(MIGRATION.lore)); this.saveDemo(); }
-    return this.state;
-  },
-  saveDemo() { localStorage.setItem(LS_KEY, JSON.stringify(this.state)); },
-  newId(prefix) { return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
+  user: null,        // {id, email} of the signed-in person
+  worlds: [],
+  worldId: null,
+  state: blankLists(),
+  db: null,          // demo-mode database (see loadDb)
 
-  async loadAll() {
-    if (DEMO) return this.loadDemo();
-    const { data: worlds, error } = await sb.from("worlds").select("id").limit(1);
+  newId(prefix) { return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
+  currentWorld() { return this.worlds.find(w => w.id === this.worldId) || null; },
+  requireWorld() {
+    if (!this.worldId) { toast("Create a world first — or join one with a sync code"); return false; }
+    return true;
+  },
+
+  // ----- Demo-mode database -----
+  // Shape: { users: [{id, email, pass}], session: userId|null,
+  //          worlds: [{id, name, seed, sync_code, owner_id, members: [userId],
+  //                    finds: [], videos: [], needs: [], lore: []}] }
+  // NOTE: demo passwords sit in plain text in this browser's localStorage.
+  // That is ONLY acceptable because demo mode is an offline try-out — live
+  // mode uses Supabase Auth, which hashes passwords properly server-side.
+  loadDb() {
+    try { this.db = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { this.db = null; }
+    if (!this.db || !Array.isArray(this.db.users) || !Array.isArray(this.db.worlds)) {
+      this.db = { users: [], session: null, worlds: [] };
+      this.saveDb();
+    }
+    return this.db;
+  },
+  saveDb() { localStorage.setItem(LS_KEY, JSON.stringify(this.db)); },
+  demoWorldRow(w) {
+    return { id: w.id, name: w.name, seed: w.seed, sync_code: w.sync_code, owner_id: w.owner_id,
+             role: w.owner_id === this.user.id ? "owner" : "member", memberCount: w.members.length };
+  },
+  demoApplyWorld(w) {
+    // Point state straight at the world's own lists, so every edit the
+    // tabs make lands in the world and just needs a saveDb() to persist.
+    this.state = { seed: w.seed, finds: w.finds, videos: w.videos, needs: w.needs, lore: w.lore };
+  },
+  demoSeedWorld(ownerId) {
+    const m = JSON.parse(JSON.stringify(MIGRATION));
+    const w = { id: this.newId("world"), name: m.name, seed: m.seed, sync_code: genSyncCode(),
+                owner_id: ownerId, members: [ownerId],
+                finds: m.finds, videos: m.videos, needs: m.needs, lore: m.lore };
+    this.db.worlds.push(w);
+    return w;
+  },
+  demoSignUp(email, password) {
+    email = String(email || "").trim().toLowerCase();
+    if (!email || !password) throw new Error("Type an email and a password first.");
+    if (this.db.users.some(u => u.email === email)) throw new Error("That email already has a demo account — log in instead.");
+    const user = { id: this.newId("user"), email, pass: password };
+    this.db.users.push(user);
+    // The very first demo account inherits the migration world, so the
+    // demo opens on Hailey's real saved data — later accounts start empty
+    // and create or join their own worlds.
+    if (this.db.worlds.length === 0) this.demoSeedWorld(user.id);
+    this.db.session = user.id;
+    this.saveDb();
+    return { id: user.id, email: user.email };
+  },
+  demoSignIn(email, password) {
+    email = String(email || "").trim().toLowerCase();
+    const user = this.db.users.find(u => u.email === email);
+    if (!user || user.pass !== password) throw new Error("Email or password doesn't match a demo account.");
+    this.db.session = user.id;
+    this.saveDb();
+    return { id: user.id, email: user.email };
+  },
+  demoSessionUser() {
+    if (!this.db) this.loadDb();
+    const user = this.db.users.find(u => u.id === this.db.session);
+    return user ? { id: user.id, email: user.email } : null;
+  },
+  demoSignOut() { if (this.db) { this.db.session = null; this.saveDb(); } },
+
+  // ----- Worlds -----
+  async loadWorlds() {
+    if (DEMO) {
+      this.worlds = this.db.worlds.filter(w => w.members.includes(this.user.id)).map(w => this.demoWorldRow(w));
+      return this.worlds;
+    }
+    // Membership rows carry the role; the embedded world carries the rest.
+    // (RLS would hide any world we don't belong to anyway.)
+    const { data, error } = await sb.from("world_members")
+      .select("role, worlds ( id, name, seed, sync_code, owner_id, created_at )")
+      .eq("user_id", this.user.id);
     if (error) throw error;
-    if (!worlds || !worlds.length) throw new Error("No world found yet — run migration-import.sql in Supabase first.");
-    worldId = worlds[0].id;
-    const [settings, finds, videos, needs, lore] = await Promise.all([
-      sb.from("settings").select("seed").eq("world_id", worldId).limit(1),
+    this.worlds = (data || []).filter(r => r.worlds).map(r => ({
+      id: r.worlds.id, name: r.worlds.name, seed: r.worlds.seed || "",
+      sync_code: r.worlds.sync_code, owner_id: r.worlds.owner_id,
+      role: r.role, memberCount: null, // filled in for the current world in loadWorldData
+    }));
+    return this.worlds;
+  },
+  async initAfterLogin(user) {
+    this.user = user;
+    await this.loadWorlds();
+    let last = null;
+    try { last = localStorage.getItem(LS_WORLD_KEY); } catch (e) { /* private mode */ }
+    const target = this.worlds.find(w => w.id === last) || this.worlds[0] || null;
+    if (target) await this.selectWorld(target.id);
+    else { this.worldId = null; worldId = null; this.state = blankLists(); renderWorldBar(); renderAll(); }
+  },
+  async selectWorld(id) {
+    this.worldId = id; worldId = id;
+    const w = this.currentWorld();
+    if (!w) { this.state = blankLists(); renderWorldBar(); renderAll(); return; }
+    try { localStorage.setItem(LS_WORLD_KEY, id); } catch (e) { /* private mode */ }
+    if (DEMO) { this.demoApplyWorld(this.db.worlds.find(x => x.id === id)); }
+    else await this.loadWorldData();
+    renderWorldBar(); renderAll();
+  },
+  async createWorld(name, seed) {
+    name = String(name || "").trim();
+    if (!name) throw new Error("Give the world a name first.");
+    seed = String(seed || "").trim();
+    if (DEMO) {
+      const w = { id: this.newId("world"), name, seed, sync_code: genSyncCode(),
+                  owner_id: this.user.id, members: [this.user.id],
+                  finds: [], videos: [], needs: [], lore: [] };
+      // Make the code unique among demo worlds too.
+      while (this.db.worlds.some(x => x.sync_code === w.sync_code)) w.sync_code = genSyncCode();
+      this.db.worlds.push(w); this.saveDb();
+      await this.loadWorlds(); await this.selectWorld(w.id);
+      return w;
+    }
+    // Inserting the world row is all it takes: the database trigger adds
+    // the owner's world_members row, and the sync_code default fills in.
+    const { data, error } = await sb.from("worlds")
+      .insert({ owner_id: this.user.id, name, seed }).select().single();
+    if (error) throw error;
+    await this.loadWorlds(); await this.selectWorld(data.id);
+    return data;
+  },
+  async joinWorld(code) {
+    code = String(code || "").trim().toUpperCase();
+    if (!code) throw new Error("Type the sync code first.");
+    if (DEMO) {
+      const w = this.db.worlds.find(x => x.sync_code === code);
+      if (!w) throw new Error("No world has that sync code — check the code and try again.");
+      if (!w.members.includes(this.user.id)) { w.members.push(this.user.id); this.saveDb(); }
+      await this.loadWorlds(); await this.selectWorld(w.id);
+      return w;
+    }
+    // Live joining MUST go through the database function: RLS stops a
+    // non-member from reading the world row to look the code up directly.
+    const { data, error } = await sb.rpc("join_world_by_code", { p_code: code });
+    if (error) throw error;
+    await this.loadWorlds(); await this.selectWorld(data);
+    return this.currentWorld();
+  },
+  async renameWorld(name) {
+    const w = this.currentWorld(); if (!w) return;
+    name = String(name || "").trim(); if (!name) return;
+    w.name = name;
+    if (DEMO) { this.db.worlds.find(x => x.id === w.id).name = name; this.saveDb(); return; }
+    const { error } = await sb.from("worlds").update({ name }).eq("id", w.id);
+    if (error) throw error;
+  },
+
+  // ----- Current world's data -----
+  async loadWorldData() {
+    // (The seed comes from the worlds row itself — see loadWorlds.)
+    const [finds, videos, needs, lore, members] = await Promise.all([
       sb.from("finds").select("*").eq("world_id", worldId).order("created_at"),
       sb.from("build_videos").select("*").eq("world_id", worldId).order("created_at"),
       sb.from("need_items").select("*").eq("world_id", worldId).order("created_at"),
       sb.from("lore_entries").select("*").eq("world_id", worldId).order("day_number"),
+      sb.from("world_members").select("user_id").eq("world_id", worldId),
     ]);
+    const w = this.currentWorld();
+    if (w && members.data) w.memberCount = members.data.length;
     this.state = {
-      seed: settings.data && settings.data[0] ? String(settings.data[0].seed) : "",
+      seed: w ? (w.seed || "") : "",
       finds: (finds.data || []).map(f => ({ id: f.id, name: f.name, dimension: f.dimension, x: f.x, y: f.y, z: f.z, note: f.note || "" })),
       videos: (videos.data || []).map(v => ({ id: v.id, title: v.title, url: v.url, youtube_id: v.youtube_id, note: v.note || "", status: v.status })),
       needs: (needs.data || []).map(n => ({ id: n.id, item_name: n.item_name, amount_needed: n.amount_needed, gathered: n.gathered, stack_size: n.stack_size })),
@@ -109,16 +295,17 @@ const Store = {
   },
   async setSeed(seed) {
     this.state.seed = seed;
-    if (DEMO) { this.saveDemo(); return; }
-    const { data } = await sb.from("settings").select("id").eq("world_id", worldId).limit(1);
-    if (data && data.length) await sb.from("settings").update({ seed }).eq("id", data[0].id);
-    else await sb.from("settings").insert({ world_id: worldId, seed });
+    const w = this.currentWorld(); if (w) w.seed = seed;
+    if (DEMO) { const dw = this.db.worlds.find(x => x.id === this.worldId); if (dw) dw.seed = seed; this.saveDb(); return; }
+    const { error } = await sb.from("worlds").update({ seed }).eq("id", worldId);
+    if (error) throw error;
   },
   async upsertFind(f) {
+    if (!this.requireWorld()) return f;
     if (DEMO) {
       if (f.id) { const i = this.state.finds.findIndex(x => x.id === f.id); if (i >= 0) this.state.finds[i] = f; }
       else { f.id = this.newId("find"); this.state.finds.push(f); }
-      this.saveDemo(); return f;
+      this.saveDb(); return f;
     }
     const row = { world_id: worldId, name: f.name, dimension: f.dimension, x: f.x, y: f.y, z: f.z, note: f.note || null };
     if (f.id && !String(f.id).startsWith("find-")) row.id = f.id;
@@ -126,14 +313,15 @@ const Store = {
     if (error) throw error; f.id = data.id; return f;
   },
   async deleteFind(id) {
-    if (DEMO) { this.state.finds = this.state.finds.filter(x => x.id !== id); this.saveDemo(); return; }
+    if (DEMO) { this.state.finds = this.state.finds.filter(x => x.id !== id); this.saveDb(); return; }
     await sb.from("finds").delete().eq("id", id);
   },
   async upsertVideo(v) {
+    if (!this.requireWorld()) return v;
     if (DEMO) {
       if (v.id) { const i = this.state.videos.findIndex(x => x.id === v.id); if (i >= 0) this.state.videos[i] = v; }
       else { v.id = this.newId("video"); this.state.videos.push(v); }
-      this.saveDemo(); return v;
+      this.saveDb(); return v;
     }
     const row = { world_id: worldId, title: v.title, url: v.url, youtube_id: v.youtube_id, note: v.note || null, status: v.status };
     if (v.id && !String(v.id).startsWith("video-")) row.id = v.id;
@@ -141,15 +329,16 @@ const Store = {
     if (error) throw error; v.id = data.id; return v;
   },
   async deleteVideo(id) {
-    if (DEMO) { this.state.videos = this.state.videos.filter(x => x.id !== id); this.saveDemo(); return; }
+    if (DEMO) { this.state.videos = this.state.videos.filter(x => x.id !== id); this.saveDb(); return; }
     await sb.from("build_videos").delete().eq("id", id);
   },
   async upsertNeed(n) {
+    if (!this.requireWorld()) return n;
     n.gathered = Math.max(0, Math.min(n.gathered, n.amount_needed));
     if (DEMO) {
       if (n.id) { const i = this.state.needs.findIndex(x => x.id === n.id); if (i >= 0) this.state.needs[i] = n; }
       else { n.id = this.newId("need"); this.state.needs.push(n); }
-      this.saveDemo(); return n;
+      this.saveDb(); return n;
     }
     const row = { world_id: worldId, item_name: n.item_name, amount_needed: n.amount_needed, gathered: n.gathered, stack_size: n.stack_size };
     if (n.id && !String(n.id).startsWith("need-")) row.id = n.id;
@@ -157,16 +346,17 @@ const Store = {
     if (error) throw error; n.id = data.id; return n;
   },
   async deleteNeed(id) {
-    if (DEMO) { this.state.needs = this.state.needs.filter(x => x.id !== id); this.saveDemo(); return; }
+    if (DEMO) { this.state.needs = this.state.needs.filter(x => x.id !== id); this.saveDb(); return; }
     await sb.from("need_items").delete().eq("id", id);
   },
   async clearGathered() {
     const got = this.state.needs.filter(n => n.gathered >= n.amount_needed && n.amount_needed > 0);
     for (const n of got) await this.deleteNeed(n.id);
     this.state.needs = this.state.needs.filter(n => !(n.gathered >= n.amount_needed && n.amount_needed > 0));
-    if (DEMO) this.saveDemo();
+    if (DEMO) this.saveDb();
   },
   async upsertLore(l) {
+    if (!this.requireWorld()) return l;
     l.day_number = Math.max(1, Math.floor(Number(l.day_number) || 1));
     if (DEMO) {
       const now = new Date().toISOString();
@@ -174,7 +364,7 @@ const Store = {
         const i = this.state.lore.findIndex(x => x.id === l.id);
         if (i >= 0) { l.created_at = this.state.lore[i].created_at || now; l.updated_at = now; this.state.lore[i] = l; }
       } else { l.id = this.newId("lore"); l.created_at = now; l.updated_at = now; this.state.lore.push(l); }
-      this.saveDemo(); return l;
+      this.saveDb(); return l;
     }
     const row = { world_id: worldId, day_number: l.day_number, title: l.title, story: l.story || null };
     if (l.id && !String(l.id).startsWith("lore-")) row.id = l.id;
@@ -184,7 +374,7 @@ const Store = {
     return l;
   },
   async deleteLore(id) {
-    if (DEMO) { this.state.lore = this.state.lore.filter(x => x.id !== id); this.saveDemo(); return; }
+    if (DEMO) { this.state.lore = this.state.lore.filter(x => x.id !== id); this.saveDb(); return; }
     await sb.from("lore_entries").delete().eq("id", id);
   },
 };
@@ -202,7 +392,27 @@ const STATUS_ORDER = ["building", "want_to_build", "built"];
 let videoFilter = "all", playingId = null;
 
 // ---------- Rendering ----------
+function renderWorldBar() {
+  const w = Store.currentWorld();
+  const sel = $("world-select");
+  sel.innerHTML = Store.worlds.length
+    ? Store.worlds.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("")
+    : `<option value="">No worlds yet</option>`;
+  if (w) sel.value = w.id;
+  $("world-empty").hidden = !!w;
+  $("world-details").hidden = !w;
+  if (!w) return;
+  $("world-name-display").textContent = w.name;
+  $("world-role").textContent = w.role === "owner" ? "Owner" : "Member";
+  $("world-members").textContent = w.memberCount ? `· ${w.memberCount} member${w.memberCount === 1 ? "" : "s"} in this world` : "";
+  $("sync-code-display").textContent = w.sync_code || "—";
+  // Only the owner can rename the world or change its seed (the database
+  // rules say the same thing — the buttons just don't pretend otherwise).
+  $("world-rename-btn").hidden = w.role !== "owner";
+  $("seed-edit-btn").hidden = w.role !== "owner";
+}
 function renderAll() {
+  renderWorldBar();
   const s = Store.state;
   $("seed-display").textContent = s.seed || "—";
   $("chunkbase-link").href = s.seed
@@ -242,7 +452,7 @@ function renderLore() {
 }
 function renderFinds() {
   const q = $("find-search").value.trim().toLowerCase();
-  const list = Store.state.finds.filter(f => !q || (f.name + " " + (f.note || "") + " " + f.dimension).toLowerCase().includes(q));
+  const list = Store.state.finds.filter(f => !q || (f.name + " " + (f.note || "") + " " + f.dimension + " " + f.x + " " + f.y + " " + f.z).toLowerCase().includes(q));
   $("finds-list").innerHTML = list.length ? list.map(f => `
     <article class="find-card">
       <p class="card-title">${esc(f.name)} <span class="badge">${esc(f.dimension)}</span></p>
@@ -328,7 +538,7 @@ function renderNetherPicker() {
 
 // ---------- Nearby (while typing a find) ----------
 function updateNearby() {
-  const x = parseInt($("find-x").value, 10), y = parseInt($("find-y").value, 10), z = parseInt($("find-z").value, 10);
+  const x = parseCoord($("find-x").value), y = parseCoord($("find-y").value), z = parseCoord($("find-z").value);
   const box = $("nearby-box"), editId = $("find-id").value;
   if ([x, y, z].some(Number.isNaN)) { box.hidden = true; return; }
   const near = Store.state.finds.filter(f => f.id !== editId)
@@ -341,7 +551,7 @@ function updateNearby() {
 // ---------- Nether ----------
 let netherDir = "to-nether", netherResult = null;
 function updateNether() {
-  const x = parseFloat($("nether-x").value), y = parseFloat($("nether-y").value), z = parseFloat($("nether-z").value);
+  const x = parseCoord($("nether-x").value), y = parseCoord($("nether-y").value), z = parseCoord($("nether-z").value);
   const box = $("nether-result");
   if ([x, y, z].some(Number.isNaN)) { box.innerHTML = ""; netherResult = null; $("nether-copy-btn").hidden = true; $("nether-save-btn").hidden = true; return; }
   const r = netherDir === "to-nether" ? overworldToNether(x, y, z) : netherToOverworld(x, y, z);
@@ -370,11 +580,49 @@ function bind() {
     document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
     document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = p.id !== "tab-" + btn.dataset.tab; });
   }));
-  // Seed
+  // Worlds — switch / rename / seed / sync code / create / join
+  $("world-select").addEventListener("change", async () => {
+    if ($("world-select").value) await Store.selectWorld($("world-select").value);
+  });
+  $("world-rename-btn").addEventListener("click", () => {
+    const w = Store.currentWorld(); if (!w) return;
+    $("world-name-input").value = w.name; $("world-rename-form").hidden = false;
+  });
+  $("world-rename-cancel").addEventListener("click", () => { $("world-rename-form").hidden = true; });
+  $("world-rename-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    try { await Store.renameWorld($("world-name-input").value); $("world-rename-form").hidden = true; renderAll(); toast("World renamed"); }
+    catch (err) { toast(err.message); }
+  });
   $("seed-edit-btn").addEventListener("click", () => { $("seed-input").value = Store.state.seed || ""; $("seed-form").hidden = false; });
   $("seed-cancel-btn").addEventListener("click", () => { $("seed-form").hidden = true; });
   $("seed-form").addEventListener("submit", async e => {
-    e.preventDefault(); await Store.setSeed($("seed-input").value.trim()); $("seed-form").hidden = true; renderAll(); toast("Seed saved");
+    e.preventDefault();
+    try { await Store.setSeed($("seed-input").value.trim()); $("seed-form").hidden = true; renderAll(); toast("Seed saved"); }
+    catch (err) { toast(err.message); }
+  });
+  $("sync-copy-btn").addEventListener("click", async () => {
+    const w = Store.currentWorld(); if (!w || !w.sync_code) return;
+    try { await navigator.clipboard.writeText(w.sync_code); toast("Sync code copied"); }
+    catch (e) { toast(w.sync_code); }
+  });
+  $("new-world-btn").addEventListener("click", () => { $("new-world-form").hidden = !$("new-world-form").hidden; $("join-world-form").hidden = true; });
+  $("new-world-cancel").addEventListener("click", () => { $("new-world-form").hidden = true; });
+  $("new-world-form").addEventListener("submit", async e => {
+    e.preventDefault(); $("new-world-error").textContent = "";
+    try {
+      await Store.createWorld($("new-world-name").value, $("new-world-seed").value);
+      e.target.reset(); $("new-world-form").hidden = true; toast("World created");
+    } catch (err) { $("new-world-error").textContent = err.message; }
+  });
+  $("join-world-btn").addEventListener("click", () => { $("join-world-form").hidden = !$("join-world-form").hidden; $("new-world-form").hidden = true; });
+  $("join-world-cancel").addEventListener("click", () => { $("join-world-form").hidden = true; });
+  $("join-world-form").addEventListener("submit", async e => {
+    e.preventDefault(); $("join-error").textContent = "";
+    try {
+      const w = await Store.joinWorld($("join-code").value);
+      e.target.reset(); $("join-world-form").hidden = true; toast(w ? `Joined “${w.name}”` : "Joined world");
+    } catch (err) { $("join-error").textContent = err.message; }
   });
   // Finds
   ["find-x", "find-y", "find-z"].forEach(id => $(id).addEventListener("input", updateNearby));
@@ -382,7 +630,8 @@ function bind() {
   $("find-form").addEventListener("submit", async e => {
     e.preventDefault();
     const f = { id: $("find-id").value || null, name: $("find-what").value.trim(), dimension: $("find-dimension").value,
-      x: parseInt($("find-x").value, 10), y: parseInt($("find-y").value, 10), z: parseInt($("find-z").value, 10), note: $("find-note").value.trim() };
+      x: parseCoord($("find-x").value), y: parseCoord($("find-y").value), z: parseCoord($("find-z").value), note: $("find-note").value.trim() };
+    if ([f.x, f.y, f.z].some(Number.isNaN)) { toast("Coordinates must be whole numbers — negatives are fine"); return; }
     await Store.upsertFind(f); e.target.reset(); $("find-id").value = ""; $("find-form-title").textContent = "Log a find";
     $("find-cancel-edit").hidden = true; $("nearby-box").hidden = true; renderAll(); toast("Find saved");
   });
@@ -490,39 +739,76 @@ function bind() {
     const n = Store.state.needs.find(x => x.id === inp.dataset.gatherInput); if (!n) return;
     n.gathered = Math.max(0, Math.min(n.amount_needed, parseInt(inp.value, 10) || 0)); await Store.upsertNeed(n); renderAll();
   });
-  // Auth
+  // Auth — personal accounts: log in, sign up, forgot password, log out.
   $("login-form").addEventListener("submit", async e => {
     e.preventDefault(); $("login-error").textContent = "";
-    const { error } = await sb.auth.signInWithPassword({ email: $("login-email").value.trim(), password: $("login-password").value });
-    if (error) $("login-error").textContent = error.message;
+    const email = $("login-email").value.trim(), password = $("login-password").value;
+    try {
+      if (DEMO) { const user = Store.demoSignIn(email, password); await showApp(user); }
+      else {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) $("login-error").textContent = error.message;
+        // On success, onAuthStateChange calls showApp.
+      }
+    } catch (err) { $("login-error").textContent = err.message; }
+  });
+  $("signup-form").addEventListener("submit", async e => {
+    e.preventDefault(); $("signup-error").textContent = ""; $("signup-msg").textContent = "";
+    const email = $("signup-email").value.trim(), password = $("signup-password").value;
+    try {
+      if (DEMO) { const user = Store.demoSignUp(email, password); await showApp(user); }
+      else {
+        const { data, error } = await sb.auth.signUp({ email, password });
+        if (error) { $("signup-error").textContent = error.message; return; }
+        if (data.session) await showApp(data.user); // onAuthStateChange also fires; showApp is guarded
+        else $("signup-msg").textContent = "Account created! Check your email to confirm it, then log in above.";
+      }
+    } catch (err) { $("signup-error").textContent = err.message; }
   });
   $("forgot-btn").addEventListener("click", async () => {
     const email = $("login-email").value.trim();
+    if (DEMO) { $("forgot-msg").textContent = "Demo mode has no email, and demo passwords live only in this browser — if you forget yours, just create a new demo account below."; return; }
     if (!email) { $("forgot-msg").textContent = "Type your email above first, then tap Forgot password."; return; }
     const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
     $("forgot-msg").textContent = error ? error.message : "Password reset email sent — check that inbox.";
   });
-  $("logout-btn").addEventListener("click", async () => { if (sb) await sb.auth.signOut(); location.reload(); });
+  $("logout-btn").addEventListener("click", async () => {
+    if (DEMO) Store.demoSignOut();
+    else if (sb) await sb.auth.signOut();
+    location.reload();
+  });
 }
 
 // ---------- Boot ----------
-async function showApp() {
+let appShownFor = null; // user id the app view is already showing (double-fire guard)
+async function showApp(user) {
+  if (!user) return;
+  if (appShownFor === user.id && !$("app-view").hidden) return;
+  appShownFor = user.id;
   $("login-view").hidden = true; $("app-view").hidden = false; $("logout-btn").hidden = false;
-  await Store.loadAll(); renderAll();
+  await Store.initAfterLogin(user);
 }
+function showLogin() {
+  appShownFor = null;
+  $("app-view").hidden = true; $("logout-btn").hidden = true; $("login-view").hidden = false;
+}
+let booted = false;
 async function boot() {
+  if (booted) return; // bind() twice would double-handle every form submit
+  booted = true;
   bind();
   if (DEMO) {
     $("demo-banner").hidden = false;
-    $("login-view").hidden = true; $("logout-btn").hidden = true;
-    await Store.loadAll(); $("app-view").hidden = false; renderAll();
+    Store.loadDb();
+    const user = Store.demoSessionUser();
+    if (user) await showApp(user); else showLogin();
     return;
   }
   const { data } = await sb.auth.getSession();
-  if (data.session) await showApp(); else { $("login-view").hidden = false; }
+  if (data.session) await showApp(data.session.user); else showLogin();
   sb.auth.onAuthStateChange(async (_evt, session) => {
-    if (session) await showApp();
-    else { $("app-view").hidden = true; $("logout-btn").hidden = true; $("login-view").hidden = false; }
+    if (session) await showApp(session.user);
+    else showLogin();
   });
 }
 document.addEventListener("DOMContentLoaded", boot);
