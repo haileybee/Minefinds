@@ -103,6 +103,17 @@ const MIGRATION = {
 };
 const blankLists = () => ({ seed: "", finds: [], videos: [], needs: [], lore: [] });
 
+// Plain-language version of a world-creation failure, so a raw database
+// error never lands on Hailey's screen unexplained.
+function friendlyCreateWorldError(err) {
+  const msg = String((err && err.message) || err || "");
+  if (/row-level security/i.test(msg)) {
+    return new Error("The database blocked that new world (a permissions snag on the server side). Your other worlds are untouched — tell Sunny; there is a one-time setup patch that fixes it.");
+  }
+  if (!msg) return new Error("The world could not be created — check your connection and tap ＋ New world again.");
+  return new Error(msg);
+}
+
 // ---------- Store abstraction ----------
 // One Store for the whole app. `Store.state` always holds the CURRENT
 // world's lists ({seed, finds, videos, needs, lore}); switching worlds
@@ -202,6 +213,7 @@ const Store = {
     this.worlds = (data || []).filter(r => r.worlds).map(r => ({
       id: r.worlds.id, name: r.worlds.name, seed: r.worlds.seed || "",
       sync_code: r.worlds.sync_code, owner_id: r.worlds.owner_id,
+      created_at: r.worlds.created_at || "",
       role: r.role, memberCount: null, // filled in for the current world in loadWorldData
     }));
     return this.worlds;
@@ -224,9 +236,23 @@ const Store = {
     else await this.loadWorldData();
     renderWorldBar(); renderAll();
   },
+  // Auto-name for one-tap world creation: "New World", then
+  // "New World 2", "New World 3", ... — the first gap in the person's
+  // existing world names wins, so renaming one frees its number up.
+  nextWorldName() {
+    const taken = new Set(this.worlds.map(w => w.name));
+    if (!taken.has("New World")) return "New World";
+    let n = 2;
+    while (taken.has(`New World ${n}`)) n++;
+    return `New World ${n}`;
+  },
+  // One-tap create (Hailey, Oct 25): like starting a new chat — the world
+  // is made instantly and you land inside it with its empty log ready.
+  // No name/seed form first: it starts auto-named with an empty seed, and
+  // the world card's Rename / Edit seed buttons are where it gets a real
+  // name (any name at all) and its seed, whenever she likes.
   async createWorld(name, seed) {
-    name = String(name || "").trim();
-    if (!name) throw new Error("Give the world a name first.");
+    name = String(name || "").trim() || this.nextWorldName();
     seed = String(seed || "").trim();
     if (DEMO) {
       const w = { id: this.newId("world"), name, seed, sync_code: genSyncCode(),
@@ -238,13 +264,33 @@ const Store = {
       await this.loadWorlds(); await this.selectWorld(w.id);
       return w;
     }
-    // Inserting the world row is all it takes: the database trigger adds
-    // the owner's world_members row, and the sync_code default fills in.
-    const { data, error } = await sb.from("worlds")
-      .insert({ owner_id: this.user.id, name, seed }).select().single();
-    if (error) throw error;
-    await this.loadWorlds(); await this.selectWorld(data.id);
-    return data;
+    // Live: a PLAIN insert — deliberately no .select()/.single().
+    // Asking the database to hand the new row straight back
+    // (INSERT ... RETURNING) fails on this table: the read policy only
+    // lets members see a world, and the owner-membership row is added by
+    // an after-insert trigger whose row is not yet visible when the
+    // returned row is checked — so the whole insert is rejected with
+    // "new row violates row-level security policy for table 'worlds'".
+    // A plain insert needs no such check. Afterwards we just reload the
+    // world list (the trigger has added our membership by then) and
+    // pick out the world that just appeared: owned by us, matching name,
+    // newest first.
+    const knownIds = new Set(this.worlds.map(w => w.id));
+    try {
+      const { error } = await sb.from("worlds")
+        .insert({ owner_id: this.user.id, name, seed });
+      if (error) throw error;
+    } catch (err) { throw friendlyCreateWorldError(err); }
+    await this.loadWorlds();
+    const mine = this.worlds.filter(w => w.owner_id === this.user.id);
+    const fresh = mine.filter(w => !knownIds.has(w.id));
+    const pool = fresh.length ? fresh : mine;
+    const created = pool.filter(w => w.name === name)
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0]
+      || pool.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0]
+      || null;
+    if (created) await this.selectWorld(created.id);
+    return created;
   },
   async joinWorld(code) {
     code = String(code || "").trim().toUpperCase();
@@ -606,16 +652,17 @@ function bind() {
     try { await navigator.clipboard.writeText(w.sync_code); toast("Sync code copied"); }
     catch (e) { toast(w.sync_code); }
   });
-  $("new-world-btn").addEventListener("click", () => { $("new-world-form").hidden = !$("new-world-form").hidden; $("join-world-form").hidden = true; });
-  $("new-world-cancel").addEventListener("click", () => { $("new-world-form").hidden = true; });
-  $("new-world-form").addEventListener("submit", async e => {
-    e.preventDefault(); $("new-world-error").textContent = "";
+  $("new-world-btn").addEventListener("click", async () => {
+    // One tap, like starting a new chat: the world exists and you are
+    // inside it straight away — no form in between. Rename and Edit
+    // seed on the world card above give it a real name and seed later.
+    $("join-world-form").hidden = true;
     try {
-      await Store.createWorld($("new-world-name").value, $("new-world-seed").value);
-      e.target.reset(); $("new-world-form").hidden = true; toast("World created");
-    } catch (err) { $("new-world-error").textContent = err.message; }
+      const w = await Store.createWorld();
+      toast(w ? `Started “${w.name}” — rename it any time` : "World created");
+    } catch (err) { toast(err.message); }
   });
-  $("join-world-btn").addEventListener("click", () => { $("join-world-form").hidden = !$("join-world-form").hidden; $("new-world-form").hidden = true; });
+  $("join-world-btn").addEventListener("click", () => { $("join-world-form").hidden = !$("join-world-form").hidden; });
   $("join-world-cancel").addEventListener("click", () => { $("join-world-form").hidden = true; });
   $("join-world-form").addEventListener("submit", async e => {
     e.preventDefault(); $("join-error").textContent = "";

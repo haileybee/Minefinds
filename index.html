@@ -78,7 +78,7 @@
     <label>Current world
       <select id="world-select"></select>
     </label>
-    <p id="world-empty" class="hint" hidden>You don't have a world yet. Create one below, or join somebody's world with its sync code.</p>
+    <p id="world-empty" class="hint" hidden>You don't have a world yet. Tap ＋ New world to start one, or join somebody's world with its sync code.</p>
 
     <div id="world-details">
       <div class="seed-row">
@@ -125,20 +125,7 @@
       <button type="button" id="new-world-btn" class="btn">＋ New world</button>
       <button type="button" id="join-world-btn" class="btn">Join with a code</button>
     </div>
-    <form id="new-world-form" hidden>
-      <h3>Create a world</h3>
-      <label>World name
-        <input type="text" id="new-world-name" autocomplete="off" required placeholder="My World">
-      </label>
-      <label>Seed (optional — you can add it later)
-        <input type="text" id="new-world-seed" inputmode="text" autocomplete="off">
-      </label>
-      <div class="btn-row">
-        <button type="submit" class="btn btn-primary">Create world</button>
-        <button type="button" id="new-world-cancel" class="btn">Cancel</button>
-      </div>
-      <p id="new-world-error" class="error" role="alert"></p>
-    </form>
+    <p class="hint">“＋ New world” starts a fresh, empty world straight away — like starting a new chat, you land right inside it. Give it any name you like afterwards with <strong>Rename</strong>, and add its seed with <strong>Edit seed</strong>.</p>
     <form id="join-world-form" hidden>
       <h3>Join a world</h3>
       <label>Sync code
