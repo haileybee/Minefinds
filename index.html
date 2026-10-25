@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2e4a22">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MineFinds">
+<title>MineFinds</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+<!-- Supabase JS client (only used when config.js holds real values) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+</head>
+<body>
+
+<div id="demo-banner" class="demo-banner" hidden>
+  LOCAL DEMO MODE — no account yet. Data is saved only in this browser so you can test everything.
+</div>
+
+<header class="app-header">
+  <div class="brand"><img src="icon.svg" alt="" class="brand-icon"><h1>MineFinds</h1></div>
+  <button id="logout-btn" class="btn btn-small btn-ghost" hidden>Log out</button>
+</header>
+
+<!-- ======================= LOGIN ======================= -->
+<main id="login-view" class="view" hidden>
+  <section class="card">
+    <h2>Family login</h2>
+    <p class="hint">One shared login for Hailey and Jason. This is a MineFinds-only
+    login — it is not a Muse, Meta, or Gmail login.</p>
+    <form id="login-form">
+      <label>Email
+        <input type="email" id="login-email" autocomplete="username" required>
+      </label>
+      <label>Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="btn btn-primary btn-big">Log in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+    <button id="forgot-btn" class="btn btn-ghost">Forgot password?</button>
+    <p id="forgot-msg" class="hint"></p>
+    <!--
+      FIRST-RUN SETUP NOTE (no public sign-up):
+      There is deliberately NO sign-up form in this app for normal use.
+      The ONE shared family account is created once, by Hailey, either
+      in the Supabase dashboard (Authentication -> Users -> Add user)
+      or by temporarily enabling sign-up before the family account
+      exists and disabling it again right after. Never share the
+      password in chat — Hailey sets it herself and gives it to Jason
+      directly.
+    -->
+  </section>
+</main>
+
+<!-- ======================= APP ======================= -->
+<main id="app-view" class="view" hidden>
+
+  <section class="card seed-card">
+    <div class="seed-row">
+      <div><span class="seed-label">World seed</span>
+      <span id="seed-display" class="seed-value">—</span></div>
+      <button id="seed-edit-btn" class="btn btn-small">Edit seed</button>
+    </div>
+    <form id="seed-form" hidden>
+      <label>Seed
+        <input type="text" id="seed-input" inputmode="text" autocomplete="off">
+      </label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Save seed</button>
+        <button type="button" id="seed-cancel-btn" class="btn">Cancel</button>
+      </div>
+    </form>
+    <a id="chunkbase-link" class="btn btn-linklike" href="#" target="_blank" rel="noopener">Open this seed in Chunkbase Seed Map ↗</a>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="finds" role="tab">Finds <span id="count-finds" class="tab-count"></span></button>
+    <button class="tab" data-tab="builds" role="tab">Builds <span id="count-builds" class="tab-count"></span></button>
+    <button class="tab" data-tab="stacks" role="tab">Stacks <span id="count-needs" class="tab-count"></span></button>
+    <button class="tab" data-tab="nether" role="tab">Nether</button>
+    <button class="tab" data-tab="lore" role="tab">Lore <span id="count-lore" class="tab-count"></span></button>
+  </nav>
+
+  <!-- ======================= FINDS ======================= -->
+  <section id="tab-finds" class="tab-panel">
+    <form id="find-form" class="card">
+      <h2 id="find-form-title">Log a find</h2>
+      <input type="hidden" id="find-id">
+      <label>What did you find?
+        <input type="text" id="find-what" required placeholder="Village, Iron farm, Diamonds…">
+      </label>
+      <label>Dimension
+        <select id="find-dimension">
+          <option>Overworld</option><option>Nether</option><option>The End</option>
+        </select>
+      </label>
+      <div class="coord-row">
+        <label>X <input type="number" id="find-x" step="1" required></label>
+        <label>Y <input type="number" id="find-y" step="1" required></label>
+        <label>Z <input type="number" id="find-z" step="1" required></label>
+      </div>
+      <div id="nearby-box" class="nearby" hidden></div>
+      <label>Note (optional)
+        <input type="text" id="find-note" placeholder="Closest village to home…">
+      </label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary btn-big">Save find</button>
+        <button type="button" id="find-cancel-edit" class="btn" hidden>Cancel edit</button>
+      </div>
+    </form>
+
+    <label class="search-label">Search finds
+      <input type="search" id="find-search" placeholder="Search…">
+    </label>
+    <div id="finds-list"></div>
+  </section>
+
+  <!-- ======================= BUILDS ======================= -->
+  <section id="tab-builds" class="tab-panel" hidden>
+    <form id="video-form" class="card">
+      <h2 id="video-form-title">Add a build video</h2>
+      <input type="hidden" id="video-id">
+      <label>Title
+        <input type="text" id="video-title" required placeholder="Starter house, Iron farm tutorial…">
+      </label>
+      <label>YouTube link
+        <input type="url" id="video-url" required placeholder="https://youtu.be/…">
+      </label>
+      <label>Status
+        <select id="video-status">
+          <option value="want_to_build">Want to Build</option>
+          <option value="building">Building</option>
+          <option value="built">Built</option>
+        </select>
+      </label>
+      <label>Note (optional)
+        <input type="text" id="video-note">
+      </label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary btn-big">Save video</button>
+        <button type="button" id="video-cancel-edit" class="btn" hidden>Cancel edit</button>
+      </div>
+    </form>
+
+    <label class="search-label">Search videos
+      <input type="search" id="video-search" placeholder="Search…">
+    </label>
+    <div class="filter-chips" id="video-filters">
+      <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="building">Building</button>
+      <button class="chip" data-filter="want_to_build">Want to Build</button>
+      <button class="chip" data-filter="built">Built</button>
+    </div>
+    <div id="videos-list"></div>
+  </section>
+
+  <!-- ======================= STACKS ======================= -->
+  <section id="tab-stacks" class="tab-panel" hidden>
+    <form id="calc-form" class="card">
+      <h2>Stack calculator</h2>
+      <label>Item
+        <input type="text" id="calc-item" placeholder="Glass, Dark oak planks…">
+      </label>
+      <div class="coord-row">
+        <label>How many?
+          <input type="number" id="calc-amount" min="0" step="1" placeholder="200">
+        </label>
+        <label>Stack size
+          <select id="calc-size">
+            <option value="64" selected>64</option>
+            <option value="16">16</option>
+            <option value="1">No stack (1)</option>
+          </select>
+        </label>
+      </div>
+      <div id="calc-result" class="calc-result" aria-live="polite"></div>
+      <button type="submit" class="btn btn-primary btn-big">Add to my list</button>
+      <p class="hint">“Add to my list” saves it under Things I Need below.</p>
+    </form>
+
+    <h2 class="section-title">Things I Need <span id="needs-count-label"></span></h2>
+    <label class="search-label">Search my list
+      <input type="search" id="need-search" placeholder="Search…">
+    </label>
+
+    <h3 class="group-title">Still need <span id="still-count"></span></h3>
+    <div id="needs-still-list"></div>
+    <h3 class="group-title">Got it <span id="got-count"></span></h3>
+    <div id="needs-got-list"></div>
+    <button id="clear-gathered-btn" class="btn btn-danger-ghost" hidden>Clear gathered items</button>
+
+    <form id="need-edit-form" class="card" hidden>
+      <h2>Edit item</h2>
+      <input type="hidden" id="need-edit-id">
+      <label>Item
+        <input type="text" id="need-edit-name" required>
+      </label>
+      <div class="coord-row">
+        <label>Needed <input type="number" id="need-edit-amount" min="0" step="1" required></label>
+        <label>Stack size
+          <select id="need-edit-size">
+            <option value="64">64</option><option value="16">16</option><option value="1">No stack (1)</option>
+          </select>
+        </label>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Save item</button>
+        <button type="button" id="need-edit-cancel" class="btn">Cancel</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ======================= NETHER ======================= -->
+  <section id="tab-nether" class="tab-panel" hidden>
+    <div class="card">
+      <h2>Nether coordinate calculator</h2>
+      <p class="hint">Every 8 blocks in the Overworld is 1 block in the Nether (X and Z only — Y stays the same).</p>
+      <div class="direction-row">
+        <button id="dir-to-nether" class="btn btn-primary direction active">Overworld → Nether</button>
+        <button id="dir-to-overworld" class="btn direction">Nether → Overworld</button>
+      </div>
+      <label>…or pick a saved find to convert
+        <select id="nether-find-picker"><option value="">— type coords below —</option></select>
+      </label>
+      <div class="coord-row">
+        <label>X <input type="number" id="nether-x" step="1"></label>
+        <label>Y <input type="number" id="nether-y" step="1"></label>
+        <label>Z <input type="number" id="nether-z" step="1"></label>
+      </div>
+      <div id="nether-result" class="calc-result" aria-live="polite"></div>
+      <div class="btn-row">
+        <button id="nether-copy-btn" class="btn" hidden>Copy result</button>
+        <button id="nether-save-btn" class="btn btn-primary" hidden>Save converted spot as a find</button>
+      </div>
+      <p id="nether-save-msg" class="hint"></p>
+    </div>
+  </section>
+
+  <!-- ======================= LORE ======================= -->
+  <section id="tab-lore" class="tab-panel" hidden>
+    <form id="lore-form" class="card">
+      <h2 id="lore-form-title">Add a lore entry</h2>
+      <input type="hidden" id="lore-id">
+      <label>Day number
+        <input type="number" id="lore-day" min="1" step="1" required placeholder="1">
+      </label>
+      <label>Title / headline
+        <input type="text" id="lore-title" required placeholder="Found Princess Peach, the rare pink sheep">
+      </label>
+      <label>Story
+        <textarea id="lore-story" rows="5" placeholder="What happened on this day of the world?"></textarea>
+      </label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary btn-big">Save lore entry</button>
+        <button type="button" id="lore-cancel-edit" class="btn" hidden>Cancel edit</button>
+      </div>
+      <p class="hint">Entries show in day order — Day 1 first — like reading the world's story from the start. Your newest entries are at the end of the list; search jumps straight to any day.</p>
+    </form>
+
+    <label class="search-label">Search lore
+      <input type="search" id="lore-search" placeholder="Search…">
+    </label>
+    <div id="lore-list"></div>
+  </section>
+
+</main>
+
+<p id="toast" class="toast" hidden></p>
+
+<script src="app.js"></script>
+</body>
+</html>
